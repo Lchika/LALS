@@ -1,17 +1,18 @@
 #include <vector>
 #include <WiFi.h>
 #include "Targets.hpp"
+#include "debug.h"
 
+int Targets::alive_target_num = 0;
 std::vector<Target> Targets::_targets;
-std::function<void(void)> Targets::_on_init = nullptr;
-std::function<void(int)> Targets::_on_hit = nullptr;
+void (*Targets::_on_init)(void);
+void (*Targets::_on_hit)(int, int);
 
-Targets::Targets(std::function<void(void)> on_init,
-                 std::function<void(int)> on_receive_ir,
-                 std::function<void(int)> on_not_receive_ir,
-                 std::function<void(int)> on_hit)
-    : _on_receive_ir(on_receive_ir)
-    , _on_not_receive_ir(on_not_receive_ir)
+Targets::Targets(void (*on_init)(void),
+                 void (*on_receive_ir)(int, bool),
+                 void (*on_not_receive_ir)(int, bool),
+                 void (*on_hit)(int, int))
+    : _on_receive_ir(on_receive_ir), _on_not_receive_ir(on_not_receive_ir)
 {
   Targets::_on_init = on_init;
   Targets::_on_hit = on_hit;
@@ -25,16 +26,22 @@ bool Targets::begin(int unit_id, int targets_num, bool begin_wifi)
   }
   if (begin_wifi)
   {
-    if(_connect_ap(unit_id)){
-      Serial.println("connected to wifi");
-    }else{
-      Serial.println("<ERROR> failed to connect wifi");
+    if (_connect_ap(unit_id))
+    {
+      DebugPrint("connected to wifi");
+    }
+    else
+    {
+      DebugPrint("<ERROR> failed to connect wifi");
     }
   }
   _server.reset(new TargetServer());
   _server->on_shoot(Targets::_handle_shoot);
   _server->on_init(Targets::_handle_init);
   _server->begin();
+
+  Targets::alive_target_num = targets_num;
+  return true;
 }
 
 std::vector<int> Targets::get_error_targets(void)
@@ -57,11 +64,11 @@ void Targets::update()
   {
     if (target.is_recieve_ir())
     {
-      _on_receive_ir(target.get_id());
+      _on_receive_ir(target.get_id(), target.is_alive);
     }
     else
     {
-      _on_not_receive_ir(target.get_id());
+      _on_not_receive_ir(target.get_id(), target.is_alive);
     }
   }
 }
@@ -86,7 +93,8 @@ void Targets::_handle_shoot(WebServer *server)
     {
       _response_to_center(*server, shoot_gun_num_i);
       target.is_alive = false;
-      Targets::_on_hit(target.get_id());
+      Targets::alive_target_num--;
+      Targets::_on_hit(target.get_id(), shoot_gun_num_i);
       return;
     }
   }
@@ -101,6 +109,7 @@ void Targets::_handle_init(WebServer *server)
   {
     target.is_alive = true;
   }
+  Targets::alive_target_num = Targets::_targets.size();
   server->send(200, "text/plain", "initialized");
 }
 
@@ -124,16 +133,17 @@ bool Targets::_connect_ap(int id)
   WiFi.mode(WIFI_AP_STA);
   WiFi.config(IPAddress(192, 168, 100, 200 + id),
               IPAddress(192, 168, 100, 1), IPAddress(255, 255, 255, 0));
-  const char* ssid = "ssid";
-  const char* password = "password";
+  const char *ssid = "ssid";
+  const char *password = "pass";
   WiFi.begin(ssid, password);
-  Serial.printf("connecting to wifi ssid = %s, password = %s", ssid, password);
+  DebugPrint("connecting to wifi ssid = %s, password = %s\n", ssid, password);
   unsigned int try_connect_count = 0;
   while (WiFi.status() != WL_CONNECTED)
   {
     try_connect_count++;
-    if (try_connect_count > 30) break;
-    Serial.print(".");
+    if (try_connect_count > 30)
+      break;
+    DebugPrint(".");
     delay(500);
   }
   if (WiFi.status() == WL_CONNECTED)
